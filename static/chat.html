@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Speaklar Portal | Chat</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+      crossorigin="anonymous"
+    />
+    <style>
+      body {
+        background: #f3f5f9;
+      }
+      .sidebar {
+        min-height: calc(100vh - 56px);
+        background: #ffffff;
+        border-right: 1px solid #e6e9ef;
+      }
+      .chat-window {
+        background: #ffffff;
+        border-radius: 16px;
+        min-height: 420px;
+        padding: 20px;
+      }
+      .message {
+        padding: 10px 14px;
+        border-radius: 12px;
+        margin-bottom: 10px;
+      }
+      .message.user {
+        background: #e7f0ff;
+        align-self: flex-end;
+      }
+      .message.bot {
+        background: #f2f4f7;
+      }
+      .timings {
+        font-size: 13px;
+        color: #6c757d;
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg bg-white shadow-sm">
+      <div class="container-fluid">
+        <span class="navbar-brand fw-semibold">Speaklar Portal</span>
+        <div class="ms-auto d-flex align-items-center gap-3">
+          <span class="text-muted" id="userLabel"></span>
+          <button class="btn btn-outline-secondary btn-sm" id="logoutBtn">Logout</button>
+        </div>
+      </div>
+    </nav>
+
+    <div class="container-fluid">
+      <div class="row">
+        <aside class="col-lg-3 col-xl-2 p-3 sidebar">
+          <h6 class="text-uppercase text-muted">Session</h6>
+          <div class="mb-3">
+            <label class="form-label">Session ID</label>
+            <input class="form-control" id="sessionId" readonly />
+          </div>
+          <button class="btn btn-outline-primary w-100" id="refreshSession">Refresh session</button>
+          <div class="mt-3 small text-muted" id="sessionInfo"></div>
+        </aside>
+
+        <main class="col-lg-9 col-xl-10 p-4">
+          <div class="chat-window d-flex flex-column" id="chatWindow"></div>
+          <div class="mt-3">
+            <label class="form-label" for="query">Ask a question</label>
+            <textarea class="form-control" id="query" rows="3" placeholder="নুডুলস বিক্রি করে?"></textarea>
+            <div class="d-flex justify-content-between align-items-center mt-2">
+              <div class="timings" id="timings"></div>
+              <button class="btn btn-primary" id="sendBtn">Send</button>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <script>
+      const sessionIdInput = document.getElementById("sessionId");
+      const userLabel = document.getElementById("userLabel");
+      const sessionInfo = document.getElementById("sessionInfo");
+      const chatWindow = document.getElementById("chatWindow");
+      const timings = document.getElementById("timings");
+
+      const sessionId = localStorage.getItem("session_id");
+      const username = localStorage.getItem("username");
+
+      if (!sessionId) {
+        window.location.href = "/login";
+      }
+
+      sessionIdInput.value = sessionId || "";
+      userLabel.textContent = username ? `User: ${username}` : "";
+
+      async function postJSON(url, payload) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = data.detail || "Request failed";
+          throw new Error(msg);
+        }
+        return data;
+      }
+
+      async function refreshSession() {
+        if (!sessionId) return;
+        try {
+          const res = await fetch(`/session/${sessionId}`);
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.detail || "Session not found");
+          }
+          sessionInfo.textContent = `Last subject: ${data.last_subject || "-"}\nHistory size: ${data.history_size}`;
+        } catch (err) {
+          sessionInfo.textContent = err.message;
+        }
+      }
+
+      function appendMessage(text, role) {
+        const div = document.createElement("div");
+        div.className = `message ${role}`;
+        div.textContent = text;
+        chatWindow.appendChild(div);
+        chatWindow.scrollTop = chatWindow.scrollHeight;
+      }
+
+      document.getElementById("sendBtn").onclick = async () => {
+        const query = document.getElementById("query").value.trim();
+        if (!query) return;
+        appendMessage(query, "user");
+        document.getElementById("query").value = "";
+        timings.textContent = "";
+
+        try {
+          const data = await postJSON("/chat", { query, session_id: sessionId });
+          appendMessage(data.answer || "No answer", "bot");
+          if (data.llm_error) {
+            appendMessage(`LLM error: ${data.llm_error}`, "bot");
+          }
+          if (data.timings) {
+            const budgetOk = data.timings.retrieval_under_100ms ? "OK" : "SLOW";
+            timings.textContent = `retrieval total ${data.timings.retrieval_total_ms}ms (${budgetOk}) | resolver ${data.timings.resolver_ms}ms | retrieval ${data.timings.retrieval_ms}ms | generation ${data.timings.generation_ms}ms | total ${data.timings.total_ms}ms`;
+          }
+        } catch (err) {
+          appendMessage(`Error: ${err.message}`, "bot");
+        }
+      };
+
+      document.getElementById("refreshSession").onclick = refreshSession;
+
+      document.getElementById("logoutBtn").onclick = async () => {
+        try {
+          await postJSON("/logout", { session_id: sessionId });
+        } catch (err) {
+          // Ignore logout failure
+        }
+        localStorage.removeItem("session_id");
+        localStorage.removeItem("username");
+        window.location.href = "/login";
+      };
+
+      refreshSession();
+    </script>
+  </body>
+</html>

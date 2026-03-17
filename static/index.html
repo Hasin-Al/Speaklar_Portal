@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="bn">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Speaklar RAG Demo</title>
+    <style>
+      :root {
+        --bg: #f5f1ea;
+        --card: #ffffff;
+        --ink: #1c1c1c;
+        --muted: #5a5a5a;
+        --accent: #1f6f8b;
+        --accent-2: #d1495b;
+        --border: #e4dccf;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Palatino Linotype", "Book Antiqua", Palatino, serif;
+        color: var(--ink);
+        background: radial-gradient(circle at 20% 10%, #fff, var(--bg));
+        min-height: 100vh;
+      }
+
+      header {
+        padding: 24px 24px 8px;
+      }
+
+      h1 {
+        margin: 0 0 4px;
+        font-size: 28px;
+        letter-spacing: 0.5px;
+      }
+
+      p.subtitle {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 16px;
+        padding: 16px 24px 40px;
+      }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 16px;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.05);
+      }
+
+      .card h2 {
+        margin: 0 0 12px;
+        font-size: 20px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      input, textarea {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        font-family: inherit;
+        font-size: 15px;
+      }
+
+      textarea {
+        min-height: 90px;
+        resize: vertical;
+      }
+
+      button {
+        margin-top: 10px;
+        background: var(--accent);
+        color: white;
+        border: none;
+        padding: 10px 14px;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 15px;
+      }
+
+      button.alt {
+        background: var(--accent-2);
+      }
+
+      .row {
+        display: flex;
+        gap: 10px;
+      }
+
+      .row button {
+        flex: 1;
+      }
+
+      .status {
+        margin-top: 10px;
+        font-size: 14px;
+        color: var(--muted);
+        white-space: pre-wrap;
+      }
+
+      .chat-box {
+        border: 1px dashed var(--border);
+        border-radius: 12px;
+        padding: 12px;
+        margin-top: 10px;
+        background: #fffdf8;
+        min-height: 120px;
+        white-space: pre-wrap;
+      }
+
+      .timings {
+        margin-top: 8px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Speaklar RAG Demo</h1>
+      <p class="subtitle">Simple login, session-based chat, Bangla catalog search</p>
+    </header>
+
+    <div class="container">
+      <section class="card">
+        <h2>Register / Login</h2>
+        <label for="username">Username</label>
+        <input id="username" type="text" placeholder="hasin" />
+        <label for="password">Password</label>
+        <input id="password" type="password" placeholder="secret123" />
+        <div class="row">
+          <button id="registerBtn" class="alt">Register</button>
+          <button id="loginBtn">Login</button>
+        </div>
+        <div id="authStatus" class="status"></div>
+      </section>
+
+      <section class="card">
+        <h2>Chat</h2>
+        <label for="query">Your question</label>
+        <textarea id="query" placeholder="নুডুলস বিক্রি করে?"></textarea>
+        <button id="sendBtn">Send</button>
+        <div class="chat-box" id="chatBox"></div>
+        <div class="timings" id="timings"></div>
+      </section>
+
+      <section class="card">
+        <h2>Session</h2>
+        <label for="sessionId">Session ID</label>
+        <input id="sessionId" type="text" />
+        <button id="sessionBtn">Check Session</button>
+        <div id="sessionStatus" class="status"></div>
+      </section>
+    </div>
+
+    <script>
+      const authStatus = document.getElementById("authStatus");
+      const sessionStatus = document.getElementById("sessionStatus");
+      const chatBox = document.getElementById("chatBox");
+      const timings = document.getElementById("timings");
+      const sessionIdInput = document.getElementById("sessionId");
+
+      const storedSession = localStorage.getItem("session_id");
+      if (storedSession) {
+        sessionIdInput.value = storedSession;
+      }
+
+      async function postJSON(url, payload) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = data.detail || "Request failed";
+          throw new Error(msg);
+        }
+        return data;
+      }
+
+      document.getElementById("registerBtn").onclick = async () => {
+        authStatus.textContent = "";
+        const username = document.getElementById("username").value.trim();
+        const password = document.getElementById("password").value;
+        try {
+          await postJSON("/register", { username, password });
+          authStatus.textContent = "Registered successfully. Now login.";
+        } catch (err) {
+          authStatus.textContent = `Register failed: ${err.message}`;
+        }
+      };
+
+      document.getElementById("loginBtn").onclick = async () => {
+        authStatus.textContent = "";
+        const username = document.getElementById("username").value.trim();
+        const password = document.getElementById("password").value;
+        try {
+          const data = await postJSON("/login", { username, password });
+          sessionIdInput.value = data.session_id;
+          localStorage.setItem("session_id", data.session_id);
+          authStatus.textContent = `Logged in. Session: ${data.session_id}`;
+        } catch (err) {
+          authStatus.textContent = `Login failed: ${err.message}`;
+        }
+      };
+
+      document.getElementById("sendBtn").onclick = async () => {
+        chatBox.textContent = "";
+        timings.textContent = "";
+        const session_id = sessionIdInput.value.trim();
+        const query = document.getElementById("query").value.trim();
+        if (!query) {
+          chatBox.textContent = "Write a question first.";
+          return;
+        }
+        try {
+          const data = await postJSON("/chat", { query, session_id });
+          chatBox.textContent = data.answer || "No answer";
+          if (data.session_id && !session_id) {
+            sessionIdInput.value = data.session_id;
+            localStorage.setItem("session_id", data.session_id);
+          }
+          if (data.timings) {
+            timings.textContent = `timings: resolver ${data.timings.resolver_ms}ms | retrieval ${data.timings.retrieval_ms}ms | generation ${data.timings.generation_ms}ms | total ${data.timings.total_ms}ms`;
+          }
+        } catch (err) {
+          chatBox.textContent = `Chat failed: ${err.message}`;
+        }
+      };
+
+      document.getElementById("sessionBtn").onclick = async () => {
+        sessionStatus.textContent = "";
+        const session_id = sessionIdInput.value.trim();
+        if (!session_id) {
+          sessionStatus.textContent = "Set session id first.";
+          return;
+        }
+        try {
+          const res = await fetch(`/session/${session_id}`);
+          const data = await res.json();
+          if (!res.ok) {
+            const msg = data.detail || "Request failed";
+            throw new Error(msg);
+          }
+          sessionStatus.textContent = JSON.stringify(data, null, 2);
+        } catch (err) {
+          sessionStatus.textContent = `Session check failed: ${err.message}`;
+        }
+      };
+    </script>
+  </body>
+</html>

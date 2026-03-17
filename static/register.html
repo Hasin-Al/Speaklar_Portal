@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Speaklar Portal | Register</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+      crossorigin="anonymous"
+    />
+    <style>
+      body {
+        background: linear-gradient(135deg, #f6f7fb, #eef2f7);
+      }
+      .auth-card {
+        max-width: 480px;
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg bg-white shadow-sm">
+      <div class="container">
+        <span class="navbar-brand fw-semibold">Speaklar Portal</span>
+        <div class="ms-auto">
+          <a class="btn btn-outline-primary" href="/login">Back to login</a>
+        </div>
+      </div>
+    </nav>
+
+    <main class="container d-flex justify-content-center align-items-center" style="min-height: calc(100vh - 72px);">
+      <div class="card auth-card shadow-sm w-100">
+        <div class="card-body p-4">
+          <h1 class="h4 mb-3">Create your account</h1>
+          <p class="text-muted mb-4">Register once to access the chat portal.</p>
+
+          <form id="registerForm">
+            <div class="mb-3">
+              <label class="form-label" for="username">Username</label>
+              <input class="form-control" id="username" type="text" required minlength="3" />
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="password">Password</label>
+              <input class="form-control" id="password" type="password" required minlength="6" />
+              <div class="form-text">Minimum 6 characters.</div>
+            </div>
+            <div class="d-grid">
+              <button class="btn btn-primary" type="submit">Register</button>
+            </div>
+          </form>
+
+          <div id="status" class="alert alert-info mt-3 d-none"></div>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      const statusEl = document.getElementById("status");
+
+      async function postJSON(url, payload) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = data.detail || "Request failed";
+          throw new Error(msg);
+        }
+        return data;
+      }
+
+      document.getElementById("registerForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        statusEl.classList.add("d-none");
+
+        const username = document.getElementById("username").value.trim();
+        const password = document.getElementById("password").value;
+
+        try {
+          await postJSON("/register", { username, password });
+          statusEl.textContent = "Registration successful. Redirecting to login...";
+          statusEl.classList.remove("d-none");
+          setTimeout(() => {
+            window.location.href = "/login";
+          }, 800);
+        } catch (err) {
+          statusEl.textContent = err.message;
+          statusEl.classList.remove("d-none");
+          statusEl.classList.remove("alert-info");
+          statusEl.classList.add("alert-warning");
+        }
+      });
+    </script>
+  </body>
+</html>
