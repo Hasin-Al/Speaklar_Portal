@@ -168,6 +168,22 @@
         window.location.href = "/login";
       };
 
+      function teardownSession() {
+        if (!sessionId) return;
+        const payload = JSON.stringify({ session_id: sessionId });
+        try {
+          navigator.sendBeacon(
+            "/session/clear",
+            new Blob([payload], { type: "application/json" })
+          );
+        } catch (err) {
+          // Ignore beacon failures
+        }
+      }
+
+      window.addEventListener("pagehide", teardownSession);
+      window.addEventListener("beforeunload", teardownSession);
+
       refreshSession();
     </script>
   </body>

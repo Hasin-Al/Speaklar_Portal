@@ -1,4 +1,5 @@
 import os
+import re
 import time
 
 from dotenv import load_dotenv
@@ -12,7 +13,7 @@ from rag.fast_answer import try_fast_answer
 from rag.generator import Generator
 from rag.indexer import Indexer
 from rag.resolver import Resolver
-from rag.session import SessionStore
+from rag.session import SessionStore, Session
 from rag.storage import Storage
 
 load_dotenv()
@@ -32,6 +33,101 @@ FAST_ONLY = os.getenv("FAST_ONLY", "false").lower() in {"1", "true", "yes"}
 FORCE_LLM = os.getenv("FORCE_LLM", "true").lower() in {"1", "true", "yes"}
 
 
+def _is_price_question(text: str) -> bool:
+    lowered = text.lower()
+    return any(k in lowered for k in ["দাম", "কত টাকা", "price", "মূল্য"])
+
+
+def _is_availability_question(text: str) -> bool:
+    lowered = text.lower()
+    return any(k in lowered for k in ["বিক্রি", "আছে", "পাওয়া", "পাওয়া", "উপলব্ধ"])
+
+
+def _question_intent(text: str) -> str | None:
+    lowered = text.lower()
+    if _is_price_question(lowered):
+        return "price"
+    if _is_availability_question(lowered):
+        return "availability"
+    if any(k in lowered for k in ["ব্র্যান্ড", "brand"]):
+        return "brand"
+    if any(k in lowered for k in ["ক্যাটাগরি", "category"]):
+        return "category"
+    if any(k in lowered for k in ["ইউনিট", "সাইজ", "unit"]):
+        return "unit"
+    if any(k in lowered for k in ["ডেলিভারি", "delivery"]):
+        return "delivery"
+    if any(k in lowered for k in ["ওয়ারেন্টি", "ওয়ারেন্টি", "warranty"]):
+        return "warranty"
+    if any(k in lowered for k in ["রিটার্ন", "return"]):
+        return "return"
+    if any(k in lowered for k in ["ছাড়", "ডিসকাউন্ট", "discount"]):
+        return "discount"
+    if any(k in lowered for k in ["সুবিধা", "ফিচার", "feature"]):
+        return "feature"
+    return None
+
+
+def _intent_phrase(intent: str) -> str:
+    return {
+        "price": "দাম কত টাকা",
+        "availability": "বিক্রি হয় কি",
+        "brand": "ব্র্যান্ড কী",
+        "category": "ক্যাটাগরি কী",
+        "unit": "ইউনিট কী",
+        "delivery": "ডেলিভারি সুবিধা আছে কি",
+        "warranty": "ওয়ারেন্টি আছে কি",
+        "return": "রিটার্ন পলিসি আছে কি",
+        "discount": "ছাড় আছে কি",
+        "feature": "সুবিধা কী",
+    }.get(intent, "বিস্তারিত কী")
+
+
+def _options_from_memory(session: Session, limit: int = 3) -> list[str]:
+    options = []
+    for item in session.subject_memory:
+        name = str(item.get("name", "")).strip()
+        if name and name not in options:
+            options.append(name)
+        if len(options) >= limit:
+            break
+    return options
+
+
+def _resolve_clarification(query: str, options: list[str]) -> str | None:
+    q = query.lower().strip()
+    if not q:
+        return None
+    for opt in options:
+        if opt.lower() in q:
+            return opt
+    # fallback: if user replies with just one token, accept it as subject
+    tokens = re.findall(r"[^\W_]+", q)
+    tokens = [t for t in tokens if len(t) >= 2]
+    if tokens and len(tokens) <= 3:
+        return " ".join(tokens)
+    return None
+
+
+def _extract_price_from_results(results: list[dict]) -> str | None:
+    if not results:
+        return None
+    for item in results:
+        price = item.get("price")
+        if price is not None:
+            return f"{price}"
+        text = str(item.get("text", "") or item.get("description", "")).strip()
+        if not text:
+            continue
+        m = re.search(r"(?:৳\s*|)\s*([০-৯0-9]+(?:[.,][০-৯0-9]+)?)\s*টাকা", text)
+        if m:
+            return m.group(1)
+        m = re.search(r"৳\s*([০-৯0-9]+(?:[.,][০-৯0-9]+)?)", text)
+        if m:
+            return m.group(1)
+    return None
+
+
 class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1)
     session_id: str = Field(..., min_length=1)
@@ -44,6 +140,10 @@ class AuthRequest(BaseModel):
 
 
 class LogoutRequest(BaseModel):
+    session_id: str = Field(..., min_length=1)
+
+
+class ClearSessionRequest(BaseModel):
     session_id: str = Field(..., min_length=1)
 
 
@@ -98,6 +198,14 @@ async def logout(req: LogoutRequest):
     return {"status": "ok"}
 
 
+@app.post("/session/clear")
+async def clear_session(req: ClearSessionRequest):
+    cleared = store.clear_context(req.session_id)
+    if not cleared:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"status": "ok"}
+
+
 @app.get("/session/{session_id}")
 async def get_session(session_id: str):
     session = store.get_existing(session_id)
@@ -118,20 +226,50 @@ async def chat(req: ChatRequest):
         raise HTTPException(status_code=401, detail="invalid session_id")
 
     total_start = time.perf_counter()
+    user_query = req.query
+    effective_query = req.query
+
+    if session.pending_intent:
+        # Clarification disabled: clear any pending state
+        session.set_pending(None, [])
 
     start = time.perf_counter()
-    expanded_query, entity, anaphor = resolver.resolve(req.query, session)
-    subject = entity or (session.last_subject if anaphor else None)
+    intent = _question_intent(effective_query)
+    options = _options_from_memory(session, limit=3)
+    explicit_candidate = resolver._extract_candidate_subject(effective_query)
+    if intent and not explicit_candidate and len(options) >= 1:
+        # No clarification: fall back to most recent subject
+        effective_query = f"{options[0]} {_intent_phrase(intent)}"
+
+    expanded_query, subject, anaphor, subject_known = resolver.resolve(effective_query, session)
     resolver_ms = (time.perf_counter() - start) * 1000
+
+    # Guard: if availability/price asked but resolver missed subject, try direct candidate
+    if subject is None and (_is_availability_question(effective_query) or _is_price_question(effective_query)):
+        candidate = resolver._extract_candidate_subject(effective_query)
+        if candidate:
+            matched = indexer.find_explicit_entity(candidate)
+            if matched:
+                subject = matched
+                subject_known = True
+            else:
+                subject = candidate
+                subject_known = False
 
     start = time.perf_counter()
     results = indexer.search(expanded_query, top_k=req.top_k)
-    if subject:
+    subject_in_kb = bool(subject_known) if subject is not None else False
+    if subject and subject_known:
         exact = [item for item in results if str(item.get("name", "")).strip() == subject]
         if not exact:
             exact = indexer.find_by_name(subject)
         if exact:
             results = exact
+            subject_in_kb = True
+    elif subject and results:
+        exact = [item for item in results if str(item.get("name", "")).strip() == subject]
+        if exact:
+            subject_in_kb = True
     retrieval_ms = (time.perf_counter() - start) * 1000
     session.last_retrieved = results
 
@@ -142,8 +280,30 @@ async def chat(req: ChatRequest):
     llm_error = None
     product_mode = indexer.is_product_kb
     availability = ("হ্যাঁ" if results else "না") if product_mode else None
+    answer = None
 
-    if FAST_ONLY:
+    if subject and not subject_in_kb:
+        if _is_price_question(effective_query):
+            answer = (
+                f"দুঃখিত, {subject} আমাদের বর্তমান জ্ঞানভান্ডারে নেই। "
+                f"তাই {subject} এর দাম বলতে পারছি না।"
+            )
+        elif _is_availability_question(effective_query):
+            answer = f"না, আমরা {subject} বিক্রি করি না।"
+        else:
+            answer = f"দুঃখিত, {subject} আমাদের বর্তমান জ্ঞানভান্ডারে নেই।"
+
+    if answer is None and subject and subject_in_kb and _is_price_question(effective_query) and not product_mode:
+        price = _extract_price_from_results(results)
+        if price:
+            answer = f"{subject} এর দাম {price} টাকা।"
+        else:
+            answer = f"দুঃখিত, {subject} এর দামের তথ্য আমাদের জ্ঞানভান্ডারে নেই।"
+        generation_ms = 0.0
+
+    if answer is not None:
+        generation_ms = 0.0
+    elif FAST_ONLY:
         if product_mode:
             answer = fast_answer or "দুঃখিত, এই তথ্য আমার কাছে নেই।"
         else:
@@ -155,7 +315,7 @@ async def chat(req: ChatRequest):
     else:
         try:
             answer = generator.generate(
-                req.query, expanded_query, results, session, availability=availability
+                effective_query, expanded_query, results, session, availability=availability
             )
             generation_ms = (time.perf_counter() - start) * 1000
         except Exception as exc:
@@ -187,7 +347,9 @@ async def chat(req: ChatRequest):
     return {
         "answer": answer,
         "session_id": session.id,
-        "entity": entity,
+        "entity": subject,
+        "subject": subject,
+        "subject_known": subject_known,
         "anaphor": anaphor,
         "timings": timings,
         "retrieved": results,

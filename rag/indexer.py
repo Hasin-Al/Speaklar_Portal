@@ -1,7 +1,7 @@
 import json
 import math
 import re
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, OrderedDict
 from typing import Dict, List, Optional
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
@@ -104,6 +104,8 @@ class Indexer:
         self._idf: Dict[str, float] = {}
         self._name_list: List[str] = [p.get("name", "") for p in products]
         self._name_tokens: List[set] = [set(_tokenize(name)) for name in self._name_list]
+        self._search_cache: "OrderedDict[tuple, List[dict]]" = OrderedDict()
+        self._search_cache_size = 128
         self._build()
 
     @classmethod
@@ -165,6 +167,11 @@ class Indexer:
             self._doc_norms[i] = math.sqrt(acc) if acc > 0.0 else 1.0
 
     def search(self, query: str, top_k: int = 5) -> List[dict]:
+        cache_key = (query, top_k)
+        cached = self._search_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         q_tokens = _tokenize(query)
         if not q_tokens:
             return []
@@ -213,6 +220,9 @@ class Indexer:
         results = []
         for _, doc_id in ranked[: max(1, top_k)]:
             results.append(self.products[doc_id])
+        self._search_cache[cache_key] = results
+        if len(self._search_cache) > self._search_cache_size:
+            self._search_cache.popitem(last=False)
         return results
 
     def find_explicit_entity(self, query: str) -> Optional[str]:
