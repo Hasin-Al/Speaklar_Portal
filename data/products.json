@@ -1,0 +1,34 @@
+[
+  {
+    "id": 1,
+    "name": "নুডুলস",
+    "price": 20,
+    "unit": "প্যাকেট",
+    "brand": "Quick",
+    "category": "স্ন্যাকস"
+  },
+  {
+    "id": 2,
+    "name": "চাল",
+    "price": 75,
+    "unit": "কেজি",
+    "brand": "Golden",
+    "category": "গ্রোসারি"
+  },
+  {
+    "id": 3,
+    "name": "চিনি",
+    "price": 110,
+    "unit": "কেজি",
+    "brand": "Sweet",
+    "category": "গ্রোসারি"
+  },
+  {
+    "id": 4,
+    "name": "ডিম",
+    "price": 12,
+    "unit": "টি",
+    "brand": "Farm",
+    "category": "ডেইরি"
+  }
+]

@@ -237,6 +237,33 @@ async def chat(req: ChatRequest):
     intent = _question_intent(effective_query)
     options = _options_from_memory(session, limit=3)
     explicit_candidate = resolver._extract_candidate_subject(effective_query)
+    explicit_entity = indexer.find_explicit_entity(effective_query)
+    if explicit_candidate and not explicit_entity:
+        session.last_subject = explicit_candidate
+        session.last_subject_known = False
+        session.remember_subject(explicit_candidate, False)
+        answer = f"না, আমরা {explicit_candidate} বিক্রি করি না।"
+        session.add_turn(user_query, answer)
+        store.save(session)
+        return {
+            "answer": answer,
+            "session_id": session.id,
+            "entity": explicit_candidate,
+            "subject": explicit_candidate,
+            "subject_known": False,
+            "anaphor": False,
+            "timings": {
+                "resolver_ms": 0.0,
+                "retrieval_ms": 0.0,
+                "retrieval_total_ms": 0.0,
+                "generation_ms": 0.0,
+                "total_ms": 0.0,
+                "retrieval_budget_ms": 100.0,
+                "retrieval_under_100ms": True,
+            },
+            "retrieved": [],
+            "llm_error": None,
+        }
     if intent and not explicit_candidate and len(options) >= 1:
         # No clarification: fall back to most recent subject
         effective_query = f"{options[0]} {_intent_phrase(intent)}"
@@ -274,32 +301,47 @@ async def chat(req: ChatRequest):
     session.last_retrieved = results
 
     start = time.perf_counter()
-    fast_answer = None
-    if indexer.is_product_kb and not FORCE_LLM:
-        fast_answer = try_fast_answer(expanded_query, results)
     llm_error = None
     product_mode = indexer.is_product_kb
     availability = ("হ্যাঁ" if results else "না") if product_mode else None
     answer = None
 
-    if subject and not subject_in_kb:
-        if _is_price_question(effective_query):
-            answer = (
-                f"দুঃখিত, {subject} আমাদের বর্তমান জ্ঞানভান্ডারে নেই। "
-                f"তাই {subject} এর দাম বলতে পারছি না।"
-            )
-        elif _is_availability_question(effective_query):
-            answer = f"না, আমরা {subject} বিক্রি করি না।"
+    # Price questions are answered strictly from KB (no LLM guessing)
+    if _is_price_question(effective_query):
+        price = None
+        if product_mode:
+            for item in results:
+                p = item.get("price")
+                if p is not None:
+                    price = p
+                    break
         else:
-            answer = f"দুঃখিত, {subject} আমাদের বর্তমান জ্ঞানভান্ডারে নেই।"
+            price = _extract_price_from_results(results)
 
-    if answer is None and subject and subject_in_kb and _is_price_question(effective_query) and not product_mode:
-        price = _extract_price_from_results(results)
-        if price:
-            answer = f"{subject} এর দাম {price} টাকা।"
+        if subject and not subject_in_kb:
+            answer = f"না, আমরা {subject} বিক্রি করি না।"
+        elif subject and subject_in_kb:
+            if price is not None:
+                answer = f"{subject} এর দাম {price} টাকা।"
+            else:
+                answer = f"{subject} এর দামের তথ্য আমাদের জ্ঞানভান্ডারে নেই।"
         else:
-            answer = f"দুঃখিত, {subject} এর দামের তথ্য আমাদের জ্ঞানভান্ডারে নেই।"
+            if price is not None and results:
+                name = str(results[0].get("name", "")).strip()
+                if name:
+                    answer = f"{name} এর দাম {price} টাকা।"
+                else:
+                    answer = f"{price} টাকা।"
+            else:
+                answer = "দামের তথ্য আমাদের জ্ঞানভান্ডারে নেই।"
         generation_ms = 0.0
+
+    fast_answer = None
+    if answer is None and indexer.is_product_kb and not FORCE_LLM:
+        fast_answer = try_fast_answer(expanded_query, results)
+
+    if subject and not subject_in_kb:
+        answer = f"না, আমরা {subject} বিক্রি করি না।"
 
     if answer is not None:
         generation_ms = 0.0

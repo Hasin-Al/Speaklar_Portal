@@ -17,7 +17,7 @@ def try_fast_answer(query: str, results: List[dict]) -> Optional[str]:
         if price is not None:
             unit_part = f" প্রতি {unit}" if unit else ""
             return f"{name} এর দাম {price} টাকা{unit_part}।"
-        return "দুঃখিত, এই পণ্যের দাম তথ্য নেই।"
+        return "এই পণ্যের দামের তথ্য নেই।"
 
     if _has_any(q, ["বিক্রি", "আছে", "পাওয়া", "উপলব্ধ"]):
         return f"হ্যাঁ, আমাদের ক্যাটালগে {name} আছে।"
